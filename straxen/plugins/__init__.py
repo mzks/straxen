@@ -21,6 +21,9 @@ from . import x1t_cuts
 from . import daqreader_hdm
 from .daqreader_hdm import *
 
+from . import nveto_daqreader
+from .nveto_daqreader import *
+
 from . import nveto_recorder
 from .nveto_recorder import *
 

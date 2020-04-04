@@ -11,6 +11,7 @@ common_opts = dict(
        straxen.peaklet_processing,
        straxen.peak_processing,
        straxen.event_processing,
+       straxen.nveto_daqreader,
        straxen.nveto_recorder,
        straxen.nveto_pulse_processing],
    store_run_fields=(
