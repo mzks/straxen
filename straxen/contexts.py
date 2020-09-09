@@ -11,7 +11,9 @@ common_opts = dict(
         straxen.double_scatter,
         straxen.nveto_recorder,
         straxen.nveto_pulse_processing,
-        straxen.nveto_hitlets],
+        straxen.nveto_hitlets,
+        straxen.lone_hitlets
+    ],
     check_available=('raw_records', 'peak_basics'),
     store_run_fields=(
         'name', 'number', 'tags.name',
@@ -71,6 +73,9 @@ def xenonnt_online(output_folder='./strax_data',
                 take_only=straxen.DAQReader.provides),
             strax.DataDirectory(
                 '/dali/lgrandi/xenonnt/processed',
+                readonly=True),
+            strax.DataDirectory(
+                '/dali/lgrandi/giovo/XENONnT/strax_data',
                 readonly=True)]
         if output_folder:
             st.storage.append(

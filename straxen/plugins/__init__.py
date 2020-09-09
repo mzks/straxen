@@ -10,6 +10,9 @@ from .pulse_processing import *
 from . import peaklet_processing
 from .peaklet_processing import *
 
+from . import lone_hitlets
+from .lone_hitlets import *
+
 from . import peak_processing
 from .peak_processing import *
 
