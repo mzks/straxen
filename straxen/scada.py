@@ -1,21 +1,30 @@
 import urllib
 import requests
+import json
+
 import pandas as pd
 import numba
 import numpy as np
-import warnings
+
 import strax
 import straxen
 
+from datetime import datetime
+from datetime import timedelta
+import time
+import pytz
+
+import getpass
+import warnings
 import sys
+
 if any('jupyter' in arg for arg in sys.argv):
     # In some cases we are not using any notebooks,
     # Taken from 44952863 on stack overflow thanks!
     from tqdm import tqdm_notebook as tqdm
 else:
     from tqdm import tqdm
-
-from straxen import uconfig
+    
 export, __all__ = strax.exporter()
 
 
@@ -30,13 +39,13 @@ class SCADAInterface:
             if you would like to query data via run_ids.
         :param use_progress_bar: Use a progress bar in the Scada interface
         """
+        self.we_are_straxen = False
+        self._token_expire_time = None
+        self._token = None
         try:
-            self.SCData_URL = uconfig.get('scada', 'scdata_url')
-            self.SCLastValue_URL = uconfig.get('scada', 'sclastvalue_url')
-            self.SCADA_SECRETS = dict(QueryType=uconfig.get('scada', 'querytype'),
-                                      username=uconfig.get('scada', 'username'),
-                                      api_key=uconfig.get('scada', 'api_key')
-                                      )
+            self.SCLogin_url = straxen.uconfig.get('scada', 'sclogin_url')
+            self.SCData_URL = straxen.uconfig.get('scada', 'scdata_url')
+            self.SCLastValue_URL = straxen.uconfig.get('scada', 'sclastvalue_url')
 
             # Load parameters from the database.
             self.pmt_file = straxen.get_resource('PMTmap_SCADA.json',
@@ -44,7 +53,7 @@ class SCADAInterface:
         except ValueError as e:
             raise ValueError(f'Cannot load SCADA information, from your xenon'
                              ' config. SCADAInterface cannot be used.') from e
-
+        
         # Use a tqdm progress bar if requested. If a user does not want
         # a progress bar, just wrap it by a tuple
         self._use_progress_bar = use_progress_bar
@@ -156,7 +165,18 @@ class SCADAInterface:
                    f'time is {now.astype(np.int64)}. I will return for the values for the '
                    'corresponding times as nans instead.')
             warnings.warn(mes)
-
+        
+        if not self._token:
+            # User has not asked for a token yet:
+            self._get_token()
+        
+        # Check if token will expire soon, if so renew the token before we query 
+        # the parameters:
+        hrs, mins = self._token_expires_in()
+        if hrs == 0 and mins < 30:
+            print('Your token will expire in less than 30 min please get first a new one:')
+            self._get_token()
+        
         # Now loop over specified parameters and get the values for those.
         iterator = enumerate(parameters.items())
         if self._use_progress_bar:
@@ -247,8 +267,7 @@ class SCADAInterface:
         df.set_index('time', inplace=True)
 
         # Init parameter query:
-        query = self.SCADA_SECRETS.copy()  # Have to copy dict since it is not immutable
-        query['name'] = parameter_name
+        query = {'name': parameter_name}
 
         # Check if first value is in requested range:
         temp_df = self._query(query,
@@ -309,8 +328,8 @@ class SCADAInterface:
 
         return df
 
-    @staticmethod
-    def _query(query, 
+    def _query(self,
+               query, 
                api, 
                start=None, 
                end=None, 
@@ -332,19 +351,44 @@ class SCADAInterface:
         else:
             query['QueryType'] = 'rawbytime'
             query.pop('interval', None)  # Interval only works with lab
-
+        
+        # Configure query url
         query_url = urllib.parse.urlencode(query)
-        values = requests.get(api + query_url)
-        values = values.json()
+        self._query_url = api + query_url
+        req=urllib.request.Request(self._query_url)
+        req.add_header('Authorization', self._token)
+        
+        try:
+            # Try to get result:
+            values = urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            if e.code != 401:
+                print(f'HTTPError {e}')
+            else:
+                # Invalid token so we have to get a new one,
+                # this should actually never happen, but you never know...
+                print('Your token is invalid. It may have expired please get a new one:')
+                # If the user puts in the wrong credentials the query will fail. 
+                self._get_token()
+                req=urllib.request.Request(self._query_url)
+                req.add_header('Authorization', self._token)
+                req.add_header('Authorization', self._token)
+                values = urllib.request.urlopen(req)
+        
+        # Read database response and check if query was valid:
+        values = values.read()
+        values = json.loads(values.decode('utf8'))
             
         temp_df = pd.DataFrame(columns=('timestampseconds', 'value'))
         if isinstance(values, dict) and raise_error_message:
+            # Not valid, why:
             query_status = values['status']
             query_message = values['message']
             raise ValueError(f'SCADAapi has not returned values for the '
                              f'parameter "{query["name"]}". It returned the '
                              f'status "{query_status}" with the message "{query_message}".')
         if isinstance(values, list):
+            # Valid so return dataframe
             temp_df = pd.DataFrame(values)
         return temp_df
 
@@ -396,6 +440,79 @@ class SCADAInterface:
                 res[key+'_I'] = value[:-4] + 'IMON'
 
         return res
+    
+        
+    def get_new_token(self):
+        """
+        Function to renew the token of the current session. Asks user for
+        Xe1TViewer/SCADA credentials.
+        """
+        self._get_token()
+    
+    
+    def _get_token(self):
+        """
+        Function which asks for user credentials to receive a personalized 
+        securtiy token. The token is required to query any data from the 
+        slow control historians.
+        """
+        print('Please, enter your Xe1TViewer/SCADA credentials:')
+        time.sleep(1)
+        if not self.we_are_straxen:
+            username = getpass.getpass('Username: ')
+            password = getpass.getpass('Password: ')
+        else:
+            username = straxen.uconfig.get('scada', 'straxen_username')
+            password = straxen.uconfig.get('scada', 'straxen_password')
+           
+        login_query = {'username': username, 
+                       'password': password,
+                      }
+        res = requests.post(self.SCLogin_url, 
+                            data=login_query)
+
+        res = res.json()
+        if 'token' not in res.keys():
+            if res['Message'] == 'Invalid username or password.':
+                raise ValueError('Cannot get security token from Slow Control web API. ' 
+                                 f'API returned the following reason: {res["Message"]} ' 
+                                'Please use your Xe1TViewer/SCADA credentials.')
+            else:
+                raise ValueError('Cannot get security token from Slow Control web API. ' 
+                                 f'API returned the following reason: {res["Message"]}')
+        else:
+            self._token = res['token']
+            toke_start_time = datetime.now(tz=pytz.timezone('utc'))
+            hours_added = timedelta(hours = 3)
+            self._token_expire_time = toke_start_time + hours_added
+            print('Received token, the token is valid for 3 hrs.\n', 
+                  f'from {toke_start_time.strftime("%d.%m. %H:%M:%S")} UTC\n', 
+                  f'till {self._token_expire_time.strftime("%d.%m. %H:%M:%S")} UTC'
+                 )
+
+
+    def token_expires_in(self):
+        """
+        Function which displays how long until the current token expires.
+        """
+        if self._token_expire_time:
+            print(f'The current token expires at {self._token_expire_time.strftime("%d.%m. %H:%M:%S")} UTC')
+            hrs, mins = self._token_expires_in()
+            print(f'Which is in {hrs} h and {mins} min.')
+        else:
+            raise ValueError('You do not have any valid token yet. Please call '
+                             '"get_new_token" first".')
+
+
+    def _token_expires_in(self):
+        """
+        Computes hrs and minutes until token expires.
+        """
+        now = datetime.now(tz=pytz.timezone('utc'))
+        dt = (self._token_expire_time - now).seconds # time delta in seconds
+        hrs = dt//3600
+        mins = dt%3600//60
+        return hrs, mins
 
 
 @export
