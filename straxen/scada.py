@@ -335,7 +335,7 @@ class SCADAInterface:
                end=None, 
                query_type_lab=False, 
                seconds_interval=None,
-              raise_error_message=True):
+               raise_error_message=True):
         """
         Helper to reduce code. Asks for data and returns result. Raises error
         if api returns error.
@@ -355,7 +355,7 @@ class SCADAInterface:
         # Configure query url
         query_url = urllib.parse.urlencode(query)
         self._query_url = api + query_url
-        req=urllib.request.Request(self._query_url)
+        req = urllib.request.Request(self._query_url)
         req.add_header('Authorization', self._token)
         
         try:
@@ -440,20 +440,18 @@ class SCADAInterface:
                 res[key+'_I'] = value[:-4] + 'IMON'
 
         return res
-    
-        
+
     def get_new_token(self):
         """
         Function to renew the token of the current session. Asks user for
         Xe1TViewer/SCADA credentials.
         """
         self._get_token()
-    
-    
+
     def _get_token(self):
         """
         Function which asks for user credentials to receive a personalized 
-        securtiy token. The token is required to query any data from the 
+        security token. The token is required to query any data from the
         slow control historians.
         """
         print('Please, enter your Xe1TViewer/SCADA credentials:')
@@ -467,7 +465,7 @@ class SCADAInterface:
            
         login_query = {'username': username, 
                        'password': password,
-                      }
+                       }
         res = requests.post(self.SCLogin_url, 
                             data=login_query)
 
@@ -476,20 +474,19 @@ class SCADAInterface:
             if res['Message'] == 'Invalid username or password.':
                 raise ValueError('Cannot get security token from Slow Control web API. ' 
                                  f'API returned the following reason: {res["Message"]} ' 
-                                'Please use your Xe1TViewer/SCADA credentials.')
+                                 'Please use your Xe1TViewer/SCADA credentials.')
             else:
                 raise ValueError('Cannot get security token from Slow Control web API. ' 
                                  f'API returned the following reason: {res["Message"]}')
         else:
             self._token = res['token']
             toke_start_time = datetime.now(tz=pytz.timezone('utc'))
-            hours_added = timedelta(hours = 3)
+            hours_added = timedelta(hours=3)
             self._token_expire_time = toke_start_time + hours_added
             print('Received token, the token is valid for 3 hrs.\n', 
                   f'from {toke_start_time.strftime("%d.%m. %H:%M:%S")} UTC\n', 
                   f'till {self._token_expire_time.strftime("%d.%m. %H:%M:%S")} UTC'
-                 )
-
+                  )
 
     def token_expires_in(self):
         """
@@ -503,15 +500,14 @@ class SCADAInterface:
             raise ValueError('You do not have any valid token yet. Please call '
                              '"get_new_token" first".')
 
-
     def _token_expires_in(self):
         """
         Computes hrs and minutes until token expires.
         """
         now = datetime.now(tz=pytz.timezone('utc'))
-        dt = (self._token_expire_time - now).seconds # time delta in seconds
+        dt = (self._token_expire_time - now).seconds  # time delta in seconds
         hrs = dt//3600
-        mins = dt%3600//60
+        mins = dt % 3600//60
         return hrs, mins
 
 
@@ -561,12 +557,12 @@ def _average_scada(times, values, nvalues):
     :return: new time values and
     """
     if len(times) % nvalues:
-        nsamples = (len(times) // nvalues) - 1
+        n_samples = (len(times) // nvalues) - 1
     else:
-        nsamples = (len(times) // nvalues)
-    res = np.zeros(nsamples, dtype=np.float32)
-    new_times = np.zeros(nsamples, dtype=np.int64)
-    for ind in range(nsamples):
+        n_samples = (len(times) // nvalues)
+    res = np.zeros(n_samples, dtype=np.float32)
+    new_times = np.zeros(n_samples, dtype=np.int64)
+    for ind in range(n_samples):
         res[ind] = np.mean(values[ind * nvalues:(ind + 1) * nvalues])
         new_times[ind] = np.mean(times[ind * nvalues:(ind + 1) * nvalues])
 
