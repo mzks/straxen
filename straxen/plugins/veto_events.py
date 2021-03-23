@@ -100,6 +100,7 @@ def veto_event_dtype(name_event_number='event_number_nv', n_pmts=120):
               (('Last hitlet endtime in event [ns].', 'last_hitlet_endtime'), np.int64),
               (('Total area of all hitlets in event [pe]', 'area'), np.float32),
               (('Total number of hitlets in events', 'n_hits'), np.int32),
+              (('Total number of contributed channels', 'n_contributed_pmt'), np.int32),
               (('Area in event per channel [pe]', 'area_per_channel'), np.float32, n_pmts),
               (('Area weighted mean time of the event relative to the event start [ns]',
                 'center_time'), np.float32),
@@ -130,6 +131,7 @@ def compute_nveto_event_properties(events, contained_hitlets, pmt_pos, start_cha
         event_area = np.sum(hitlets['area'])
         e['area'] = event_area
         e['n_hits'] = len(hitlets)
+        e['n_contributed_pmt'] = len(np.unique(hitlets['channel']))
 
         t = hitlets['time'] - hitlets[0]['time']
         if event_area:
