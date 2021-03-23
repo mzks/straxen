@@ -18,6 +18,9 @@ from immutabledict import immutabledict
     strax.Option('channel_map', track=False, type=immutabledict,
                  help="immutabledict mapping subdetector to (min, max) "
                       "channel number."),
+    strax.Option('nveto_pmt_position_map', track=False,
+                 help="nVeto PMT position mapfile",
+                default='nveto_pmt_position_mc.csv'),
 )
 class nVETOEvents(strax.OverlapWindowPlugin):
     """
@@ -47,6 +50,8 @@ class nVETOEvents(strax.OverlapWindowPlugin):
         self.to_pe = straxen.get_to_pe(self.run_id,
                                        self.config['gain_model_nv'],
                                        self.n_channel)
+        df_pmt_pos = straxen.get_resource(self.config['nveto_pmt_position_map'],fmt='csv')
+        self.pmt_pos = df_pmt_pos.to_numpy(dtype=np.float32)
 
     def get_window_size(self):
         return self.config['event_left_extension_nv'] + self.config['event_resolving_time_nv'] + 1
@@ -75,6 +80,7 @@ class nVETOEvents(strax.OverlapWindowPlugin):
         if len(split_hitlets):
             compute_nveto_event_properties(events,
                                            split_hitlets,
+                                           pmt_pos=self.pmt_pos,
                                            start_channel=self.channel_range[0])
 
         # Cut all those events for which we have less than self.config['event_min_hits_nv'] 
@@ -96,13 +102,20 @@ def veto_event_dtype(name_event_number='event_number_nv', n_pmts=120):
               (('Total number of hitlets in events', 'n_hits'), np.int32),
               (('Area in event per channel [pe]', 'area_per_channel'), np.float32, n_pmts),
               (('Area weighted mean time of the event relative to the event start [ns]',
-                'center_time'), np.float32)
+                'center_time'), np.float32),
+              (('Weighted variance of time [ns]', 'center_time_spread'), np.float32),
+              (('Area weighted mean of position in x [mm]', 'pos_x'), np.float32),
+              (('Area weighted mean of position in y [mm]', 'pos_y'), np.float32),
+              (('Area weighted mean of position in z [mm]', 'pos_z'), np.float32),
+              (('Weighted variance of position in x [mm]', 'pos_x_spread'), np.float32),
+              (('Weighted variance of position in y [mm]', 'pos_y_spread'), np.float32),
+              (('Weighted variance of position in z [mm]', 'pos_z_spread'), np.float32),
               ]
     return dtype
 
 
 @numba.njit(cache=True, nogil=True)
-def compute_nveto_event_properties(events, contained_hitlets, start_channel=2000):
+def compute_nveto_event_properties(events, contained_hitlets, pmt_pos, start_channel=2000):
     """
     Computes properties of the neutron-veto events. Writes results
     directly to events.
@@ -121,13 +134,21 @@ def compute_nveto_event_properties(events, contained_hitlets, start_channel=2000
         t = hitlets['time'] - hitlets[0]['time']
         if event_area:
             e['center_time'] = np.sum(t * hitlets['area']) / event_area
-        else:
-            e['center_time'] = np.nan
-            
-        # Compute endtime of last hitlet in event:
-        endtime = strax.endtime(hitlets)
-        e['last_hitlet_endtime'] = max(endtime)
-        
+            pmt_x = pmt_pos[hitlets['channel']-start_channel, 2] # 2 is index of x
+            e['pos_x'] = np.sum(pmt_x * hitlets['area']) / e['area']
+            pmt_y = pmt_pos[hitlets['channel']-start_channel, 3] # 3 is index of y
+            e['pos_y'] = np.sum(pmt_y * hitlets['area']) / e['area']
+            pmt_z = pmt_pos[hitlets['channel']-start_channel, 4] # 4 is index of z
+            e['pos_z'] = np.sum(pmt_z * hitlets['area']) / e['area']
+            if e['n_hits'] > 1:
+                w = hitlets['area']/e['area'] # normalized weights
+                e['center_time_spread'] = np.sqrt(np.sum(w*np.power(t-e['center_time'],2))/np.sum(w))
+                e['pos_x_spread'] = np.sqrt(np.sum(w*np.power(pmt_x-e['pos_x'],2))/np.sum(w))
+                e['pos_y_spread'] = np.sqrt(np.sum(w*np.power(pmt_y-e['pos_y'],2))/np.sum(w))
+                e['pos_z_spread'] = np.sqrt(np.sum(w*np.power(pmt_z-e['pos_z'],2))/np.sum(w))
+            else:
+                e['center_time_spread'] = np.inf
+
         # Compute per channel properties:
         for h in hitlets:
             ch = h['channel'] - start_channel
