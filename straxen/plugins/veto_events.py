@@ -18,9 +18,6 @@ from immutabledict import immutabledict
     strax.Option('channel_map', track=False, type=immutabledict,
                  help="immutabledict mapping subdetector to (min, max) "
                       "channel number."),
-    strax.Option('nveto_pmt_position_map', track=False,
-                 help="nVeto PMT position mapfile",
-                default='nveto_pmt_position_mc.csv'),
 )
 class nVETOEvents(strax.OverlapWindowPlugin):
     """
@@ -50,8 +47,6 @@ class nVETOEvents(strax.OverlapWindowPlugin):
         self.to_pe = straxen.get_to_pe(self.run_id,
                                        self.config['gain_model_nv'],
                                        self.n_channel)
-        df_pmt_pos = straxen.get_resource(self.config['nveto_pmt_position_map'],fmt='csv')
-        self.pmt_pos = df_pmt_pos.to_numpy(dtype=np.float32)
 
     def get_window_size(self):
         return self.config['event_left_extension_nv'] + self.config['event_resolving_time_nv'] + 1
@@ -80,7 +75,6 @@ class nVETOEvents(strax.OverlapWindowPlugin):
         if len(split_hitlets):
             compute_nveto_event_properties(events,
                                            split_hitlets,
-                                           pmt_pos=self.pmt_pos,
                                            start_channel=self.channel_range[0])
 
         # Cut all those events for which we have less than self.config['event_min_hits_nv'] 
@@ -105,18 +99,12 @@ def veto_event_dtype(name_event_number='event_number_nv', n_pmts=120):
               (('Area weighted mean time of the event relative to the event start [ns]',
                 'center_time'), np.float32),
               (('Weighted variance of time [ns]', 'center_time_spread'), np.float32),
-              (('Area weighted mean of position in x [mm]', 'pos_x'), np.float32),
-              (('Area weighted mean of position in y [mm]', 'pos_y'), np.float32),
-              (('Area weighted mean of position in z [mm]', 'pos_z'), np.float32),
-              (('Weighted variance of position in x [mm]', 'pos_x_spread'), np.float32),
-              (('Weighted variance of position in y [mm]', 'pos_y_spread'), np.float32),
-              (('Weighted variance of position in z [mm]', 'pos_z_spread'), np.float32),
               ]
     return dtype
 
 
 @numba.njit(cache=True, nogil=True)
-def compute_nveto_event_properties(events, contained_hitlets, pmt_pos, start_channel=2000):
+def compute_nveto_event_properties(events, contained_hitlets, start_channel=2000):
     """
     Computes properties of the neutron-veto events. Writes results
     directly to events.
@@ -136,18 +124,9 @@ def compute_nveto_event_properties(events, contained_hitlets, pmt_pos, start_cha
         t = hitlets['time'] - hitlets[0]['time']
         if event_area:
             e['center_time'] = np.sum(t * hitlets['area']) / event_area
-            pmt_x = pmt_pos[hitlets['channel']-start_channel, 2] # 2 is index of x
-            e['pos_x'] = np.sum(pmt_x * hitlets['area']) / e['area']
-            pmt_y = pmt_pos[hitlets['channel']-start_channel, 3] # 3 is index of y
-            e['pos_y'] = np.sum(pmt_y * hitlets['area']) / e['area']
-            pmt_z = pmt_pos[hitlets['channel']-start_channel, 4] # 4 is index of z
-            e['pos_z'] = np.sum(pmt_z * hitlets['area']) / e['area']
             if e['n_hits'] > 1:
                 w = hitlets['area']/e['area'] # normalized weights
                 e['center_time_spread'] = np.sqrt(np.sum(w*np.power(t-e['center_time'],2))/np.sum(w))
-                e['pos_x_spread'] = np.sqrt(np.sum(w*np.power(pmt_x-e['pos_x'],2))/np.sum(w))
-                e['pos_y_spread'] = np.sqrt(np.sum(w*np.power(pmt_y-e['pos_y'],2))/np.sum(w))
-                e['pos_z_spread'] = np.sqrt(np.sum(w*np.power(pmt_z-e['pos_z'],2))/np.sum(w))
             else:
                 e['center_time_spread'] = np.inf
 
@@ -160,6 +139,9 @@ def compute_nveto_event_properties(events, contained_hitlets, pmt_pos, start_cha
 @strax.takes_config(
     strax.Option('angle_max_time_nv', default=10,
                  help="Time [ns] within an evnet use to compute the azimuthal angle of the event."),
+    strax.Option('nveto_pmt_position_map', track=False,
+                 help="nVeto PMT position mapfile",
+                default='nveto_pmt_position_mc.csv'),
 )
 class nVETOEventPositions(strax.Plugin):
     """
@@ -180,27 +162,50 @@ class nVETOEventPositions(strax.Plugin):
     dtype = []
     dtype += strax.time_fields
     dtype += [(('Azimuthal angle, where the neutron capture was detected in [0, 2 pi).',
-                'angle'), np.float32)]
+                'angle'), np.float32),
+              (('Area weighted mean of position in x [mm]', 'pos_x'), np.float32),
+              (('Area weighted mean of position in y [mm]', 'pos_y'), np.float32),
+              (('Area weighted mean of position in z [mm]', 'pos_z'), np.float32),
+              (('Weighted variance of position in x [mm]', 'pos_x_spread'), np.float32),
+              (('Weighted variance of position in y [mm]', 'pos_y_spread'), np.float32),
+              (('Weighted variance of position in z [mm]', 'pos_z_spread'), np.float32)
+          ]
 
     __version__ = '0.0.2'
 
     def setup(self):
         self.pmt_properties = 1
-        raise NotImplementedError('Need X/Y/Z in database')
+        df_pmt_pos = straxen.get_resource(self.config['nveto_pmt_position_map'],fmt='csv')
+        self.pmt_pos = df_pmt_pos.to_numpy(dtype=np.float32)
 
     def compute(self, events_nv, hitlets_nv):
-        hits_in_events = strax.split_by_containment(hitlets_nv,
-                                                    events_nv)
-
-        angle = compute_average_angle(hits_in_events,
-                                      self.pmt_properties)
-
+        hits_in_events = strax.split_by_containment(hitlets_nv, events_nv)
         event_angles = np.zeros(len(events_nv), dtype=self.dtype)
 
-        event_angles['angle'] = angle
+        #angle = compute_average_angle(hits_in_events,
+        #                              self.pmt_properties)
+
+        #event_angles['angle'] = angle
+        compute_positions(event_angles, events_nv, hits_in_events, self.pmt_pos)
         strax.copy_to_buffer(events_nv, event_angles, '_copy_events_nv')
 
         return event_angles
+
+@numba.njit
+def compute_positions(event_angles, events, contained_hitlets, pmt_pos, start_channel=2000):
+    for e_angles, e, hitlets in zip(event_angles, events, contained_hitlets):
+        if e['area']:
+            pmt_x = pmt_pos[hitlets['channel']-start_channel, 2] # 2 is index of x
+            e_angles['pos_x'] = np.sum(pmt_x * hitlets['area']) / e['area']
+            pmt_y = pmt_pos[hitlets['channel']-start_channel, 3] # 3 is index of y
+            e_angles['pos_y'] = np.sum(pmt_y * hitlets['area']) / e['area']
+            pmt_z = pmt_pos[hitlets['channel']-start_channel, 4] # 4 is index of z
+            e_angles['pos_z'] = np.sum(pmt_z * hitlets['area']) / e['area']
+            if e['n_hits'] > 1:
+                w = hitlets['area']/e['area'] # normalized weights
+                e_angles['pos_x_spread'] = np.sqrt(np.sum(w*np.power(pmt_x-e_angles['pos_x'],2))/np.sum(w))
+                e_angles['pos_y_spread'] = np.sqrt(np.sum(w*np.power(pmt_y-e_angles['pos_y'],2))/np.sum(w))
+                e_angles['pos_z_spread'] = np.sqrt(np.sum(w*np.power(pmt_z-e_angles['pos_z'],2))/np.sum(w))
 
 
 @numba.njit
@@ -273,3 +278,4 @@ def _circ_angle(x, y):
         print(x, y)
         raise ValueError('It should be impossible to arrive here, '
                          'but somehow we managed.')
+
