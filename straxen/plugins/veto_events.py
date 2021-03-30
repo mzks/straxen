@@ -130,8 +130,6 @@ def compute_nveto_event_properties(events, contained_hitlets, start_channel=2000
                 e['center_time_spread'] = np.sqrt(np.sum(w*np.power(t-e['center_time'],2))/np.sum(w))
             else:
                 e['center_time_spread'] = np.inf
-        else:
-            e['center_time'] = np.nan
 
         # Compute per channel properties:
         for h in hitlets:
