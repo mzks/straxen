@@ -124,16 +124,23 @@ def compute_nveto_event_properties(events, contained_hitlets, start_channel=2000
         t = hitlets['time'] - hitlets[0]['time']
         if event_area:
             e['center_time'] = np.sum(t * hitlets['area']) / event_area
-            if e['n_hits'] > 1:
+            if e['n_hits'] > 1 and e['center_time']:
                 w = hitlets['area']/e['area'] # normalized weights
+                # Definition of variance
                 e['center_time_spread'] = np.sqrt(np.sum(w*np.power(t-e['center_time'],2))/np.sum(w))
             else:
                 e['center_time_spread'] = np.inf
+        else:
+            e['center_time'] = np.nan
 
         # Compute per channel properties:
         for h in hitlets:
             ch = h['channel'] - start_channel
             e['area_per_channel'][ch] += h['area']
+
+        # Compute endtime of last hitlet in event:
+        endtime = strax.endtime(hitlets)
+        e['last_hitlet_endtime'] = max(endtime)
 
 
 @strax.takes_config(
@@ -182,10 +189,10 @@ class nVETOEventPositions(strax.Plugin):
         hits_in_events = strax.split_by_containment(hitlets_nv, events_nv)
         event_angles = np.zeros(len(events_nv), dtype=self.dtype)
 
-        #angle = compute_average_angle(hits_in_events,
-        #                              self.pmt_properties)
+        angle = compute_average_angle(hits_in_events,
+                                      self.pmt_properties)
 
-        #event_angles['angle'] = angle
+        event_angles['angle'] = angle
         compute_positions(event_angles, events_nv, hits_in_events, self.pmt_pos)
         strax.copy_to_buffer(events_nv, event_angles, '_copy_events_nv')
 
